@@ -22,7 +22,7 @@ class Vacancy:
 
 # Класс для хранения информации о фильтрах для поиска вакансий
 class Filter:
-    def __init__(self, key_words="", area="", salary="", ban_words="", education="", experience_of_work="", employment="", schedule=""):
+    def __init__(self, key_words="", area=1, salary=1000, ban_words="", education="", experience_of_work="", employment="", schedule=""):
         self.key_words = key_words
         self.area = area
         self.salary = salary
@@ -31,6 +31,16 @@ class Filter:
         self.experience = experience_of_work
         self.employment = employment
         self.schedule = schedule
+
+    def print_filter(self):
+        print("Поиск по фразе:", self.key_words)
+        print("Поиск в зоне с ID:", self.area)
+        print("Поиск по зарплате:", self.salary)
+        print("В поиске не будет слов:", *self.ban_words)
+        print("Поиск по уровню образование:", *self.education)
+        print("Поиск по опыту работы:", self.experience)
+        print("Поиск по занятости:", *self.employment)
+        print("Поиск по графику работы:", *self.schedule)
 
     def copy(self):
         return Filter(self.key_words, self.area, self.salary, self.ban_words, self.education, self.experience, self.employment, self.schedule)
@@ -81,36 +91,37 @@ class HeadHunterParser(Parser):
     __education = {
         "Не требуется или не указано": "not_required_or_not_specified",
         "Среднее профессиональное": "special_secondary",
-        "Высшее": "higher",
-        "": ""
+        "Высшее": "higher"
     }
     __experience = {
-        "Не имеет значения": "doesNotMatter",
+        "Не имеет значения": "noExperience",
         "Нет опыта": "noExperience",
         "От 1 года до 3 лет": "between1And3",
         "От 3 до 6 лет": "between3And6",
-        "Более 6 лет": "moreThan6",
-        "": ""
+        "Более 6 лет": "moreThan6"
     }
     __employment = {
         "Полная занятость": "full",
         "Частичная занятость": "part",
         "Проектная работа/разовое задание": "project",
         "Волонтерство": "volunteer",
-        "Стажировка": "internship",
-        "": ""
+        "Стажировка": "probation"
     }
     __schedule = {
         "Полный день": "fullDay",
         "Сменный график": "shift",
         "Гибкий график": "flexible",
         "Удаленная работа": "remote",
-        "Вахтовый метод": "flyInFlyOut",
-        "": ""
+        "Вахтовый метод": "fly_in_fly_out"
     }
 
+    # __headers = {
+    #     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.72 Safari/537.36'
+    # }
+
     __headers = {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.72 Safari/537.36'
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
     }
 
     def __init__(self, filter, vacancies, lock):
@@ -118,58 +129,84 @@ class HeadHunterParser(Parser):
         self.lock = lock
         self.filter = filter.copy()
         self.url = "https://hh.ru/search/vacancy"
+        # self.params = {
+        #     "L_save_area": "true",
+        #     "text": self.filter.key_words,
+        #     "excluded_text": self.filter.ban_words,
+        #     "area": self.filter.area,
+        #     "salary": self.filter.salary,
+        #     "currency_code": "RUR",
+        #     "education": [HeadHunterParser.__education[filter_education] for filter_education in self.filter.education],
+        #     "experience": HeadHunterParser.__experience[self.filter.experience],
+        #     "employment": [HeadHunterParser.__employment[filter_employment] for filter_employment in
+        #                    self.filter.employment],
+        #     "schedule": [HeadHunterParser.__schedule[filter_schedule] for filter_schedule in self.filter.schedule],
+        #     "order_by": "relevance",
+        #     "search_period": "0",
+        #     "items_oxn_page": "100",
+        #     "page": 0,
+        #     "hhtmFrom": "vacancy_search_filter"
+        # }
         self.params = {
-            "L_save_area": "true",
-            "text": self.filter.key_words,
-            "excluded_text": self.filter.ban_words,
-            "area": self.filter.area,
-            "salary": self.filter.salary,
-            "currency_code": "RUR",
-            "education": [HeadHunterParser.__education[filter_education] for filter_education in self.filter.education],
-            "experience": HeadHunterParser.__experience[self.filter.experience],
-            "employment": [HeadHunterParser.__employment[filter_employment] for filter_employment in
-                           self.filter.employment],
-            "schedule": [HeadHunterParser.__schedule[filter_schedule] for filter_schedule in self.filter.schedule],
-            "order_by": "relevance",
-            "search_period": "0",
-            "items_oxn_page": "100",
             "page": 0,
-            "hhtmFrom": "vacancy_search_filter"
+            "per_page": 100,
+            "text": self.filter.key_words,
+            "area": self.filter.area,
+            "salary": self.filter.salary
         }
-        self.page = r.get("https://api.hh.ru/vacancies")
-        self.page = r.get(self.url, params=self.params, headers=self.headers)
-        self.bs = BeautifulSoup(self.page.text, "html.parser")
+        if self.filter.experience:
+            self.params["experience"] = HeadHunterParser.__experience[self.filter.experience]
+        if self.filter.employment:
+            self.params["employment"] = [HeadHunterParser.__employment[filter_employment] for filter_employment in
+                            self.filter.employment]
+        if self.filter.schedule:
+            self.params["schedule"] = [HeadHunterParser.__schedule[filter_schedule] for filter_schedule in self.filter.schedule]
+        # self.page = r.get(self.url, params=self.params, headers=HeadHunterParser.__headers)
+
+    def get_page(self):
+        page = r.get("https://api.hh.ru/vacancies", params=self.params, headers=HeadHunterParser.__headers)
+        data = json.loads(page.content.decode())
+        page.close()
+        return data
 
     def parse(self):
         while True:
-            vacancies = self.bs.findAll(class_="magritte-redesign")
-            for vacancy in vacancies:
-                name = vacancy.find("span", class_="magritte-text___tkzIl_4-3-12").text
-                salary = vacancy.find("span", class_="magritte-text___pbpft_3-0-18 magritte-text_style-primary___AQ7MW_3-0-18 magritte-text_typography-label-1-regular___pi3R-_3-0-18").text
-                href = vacancy.find("a", class_="magritte-link___b4rEM_4-3-12 magritte-link_style_neutral___iqoW0_4-3-12 magritte-link_enable-visited___Biyib_4-3-12")['href']
+            data = self.get_page()
+            print(data)
+            # data["items"].keys() = name, area, salary, url, schedule, experience, employment
+            for vacancy in data["items"]:
+                name = vacancy["name"]
+                try:
+                    salary = vacancy["salary"]["from"]
+                except:
+                    salary = ""
+                url = vacancy["alternate_url"]
                 with self.lock:
-                    self.vacancies.put(Vacancy(name, href, salary))
+                    self.vacancies.put(Vacancy(name, url, salary))
+            if data["page"] < 10:
+                self.params["page"] += 1
+            else: break
+            # vacancies = self.bs.findAll(class_="magritte-redesign")
+            # for vacancy in vacancies:
+            #     name = vacancy.find("span", class_="magritte-text___tkzIl_4-3-12").text
+            #     salary = vacancy.find("span", class_="magritte-text___pbpft_3-0-18 magritte-text_style-primary___AQ7MW_3-0-18 magritte-text_typography-label-1-regular___pi3R-_3-0-18").text
+            #     href = vacancy.find("a", class_="magritte-link___b4rEM_4-3-12 magritte-link_style_neutral___iqoW0_4-3-12 magritte-link_enable-visited___Biyib_4-3-12")['href']
+            #     with self.lock:
+            #         self.vacancies.put(Vacancy(name, href, salary))
             # if not self.is_last_page():
             #     self.params["page"] += 1
             #     self.page = r.get(self.url, params=self.params, headers=self.headers)
             #     self.bs = BeautifulSoup(self.page.text, "html.parser")
             # else:
             #     break
-            break
+            # break
 
-    def is_last_page(self): # returns True if it's the last page
-        page_numbers = self.bs.find("ul", class_="magritte-number-pages-container___YIJLn_4-0-22").findAll('li')
-        for i, number in enumerate(page_numbers):
-            href = number.find("a", class_="magritte-number-pages-action___e3ozw_4-0-22 magritte-number-pages-action-icon___lwXFB_4-0-22")
-            if href.text == self.params["page"]+1 and i != len(page_numbers)-1: return False
-        return True
-
-# Парсер хабра
-class HabrParser(Parser):
-    pass
-
-class SuperJobParser(Parser):
-    pass
+    # def is_last_page(self): # returns True if it's the last page
+    #     page_numbers = self.bs.find("ul", class_="magritte-number-pages-container___YIJLn_4-0-22").findAll('li')
+    #     for i, number in enumerate(page_numbers):
+    #         href = number.find("a", class_="magritte-number-pages-action___e3ozw_4-0-22 magritte-number-pages-action-icon___lwXFB_4-0-22")
+    #         if href.text == self.params["page"]+1 and i != len(page_numbers)-1: return False
+    #     return True
 
 # начать парсинг на всех сайтах учитывая filter. Тут запускаются процессы
 def startParse(filter):
@@ -184,13 +221,11 @@ def startParse(filter):
     # habr = HabrParser()
     # superjob = SuperJobParser()
 
-    time.sleep(10000000)
-
     hhp = mp.Process(target=headhunter.parse())
     # h = mp.Process(target=habr.parse())
     # sj = mp.Process(target=superjob.parse())
 
-    # hhp.start()
+    hhp.start()
     # h.start()
     # sj.start()
 
@@ -199,23 +234,16 @@ def startParse(filter):
     # sj.join()
 
     print("Поиск завершён!")
+    save_vacancies(vacancies)
+    print("Все найденные вакансии находятся в файле vacancies.txt! (нажмите enter для продолжения)")
     input()
-    print_vacancies(vacancies)
 
 # Вывести все найденные вакансии
-def print_vacancies(vacancies):
-    clear()
-    print_menu_text()
-    print("Выводим вакансии:\n\n")
-    while not vacancies.empty():
-        vacancy = vacancies.get()
-        print(vacancy.name)
-        print("(", vacancy.salary_from, "-", vacancy.salary_to)
-        print(vacancy.url)
-        print()
-    print("\nБольше ничего не найдено!\n")
-    input()
-    return
+def save_vacancies(vacancies):
+    with open("vacancies.txt", mode='w') as f:
+        while not vacancies.empty():
+            vacancy = vacancies.get()
+            f.write(f"{vacancy.name} ({vacancy.salary})\n{vacancy.url}\n\n")
 
 # Вводим и проверяем город, который ввёл пользователь для парсинга вакансий в нём
 def get_city(areas):
@@ -262,14 +290,14 @@ def getId(areas, custom_area):
 def get_key_words():
     clear()
     print_menu_text()
-    key_words = input("Введите ключевые слова: ").lower()
+    key_words = input("Введите ключевые слова/фразы: ").lower()
     return key_words
 
 # запрашивает исключающие слова, которых не будет в вакансиях при парсинге
 def get_ban_words():
     clear()
     print_menu_text()
-    ban_words = input("Введите исключающие слова через запятую: ").split(", ")
+    ban_words = input("Введите исключающие слова/фразы через запятую: ").split(",")
     return ban_words
 
 # указать ожидаемую зарплату (и выше) при парсинге
