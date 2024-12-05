@@ -172,20 +172,26 @@ class HeadHunterParser(Parser):
     def parse(self):
         while True:
             data = self.get_page()
-            print(data)
+            try:
             # data["items"].keys() = name, area, salary, url, schedule, experience, employment
-            for vacancy in data["items"]:
-                name = vacancy["name"]
-                try:
-                    salary = vacancy["salary"]["from"]
-                except:
-                    salary = ""
-                url = vacancy["alternate_url"]
-                with self.lock:
-                    self.vacancies.put(Vacancy(name, url, salary))
-            if data["page"] < 10:
-                self.params["page"] += 1
-            else: break
+                for vacancy in data["items"]:
+                    name = vacancy["name"]
+                    try:
+                        salary = vacancy["salary"]["from"]
+                    except:
+                        salary = ""
+                    url = vacancy["alternate_url"]
+                    with self.lock:
+                        self.vacancies.put(Vacancy(name, url, salary))
+                if data["page"] < 10:
+                    self.params["page"] += 1
+                else: break
+            except KeyError:
+                print("KEYERROR!!!")
+                print(data)
+            except:
+                print("ОШИБКА ОШИБКА ОШИБКА!!!!")
+                print(data)
             # vacancies = self.bs.findAll(class_="magritte-redesign")
             # for vacancy in vacancies:
             #     name = vacancy.find("span", class_="magritte-text___tkzIl_4-3-12").text
@@ -240,7 +246,7 @@ def startParse(filter):
 
 # Вывести все найденные вакансии
 def save_vacancies(vacancies):
-    with open("vacancies.txt", mode='w') as f:
+    with open("vacancies.txt", mode='w', encoding='utf-8') as f:
         while not vacancies.empty():
             vacancy = vacancies.get()
             f.write(f"{vacancy.name} ({vacancy.salary})\n{vacancy.url}\n\n")
