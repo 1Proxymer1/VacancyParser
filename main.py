@@ -1,3 +1,5 @@
+from idlelib.pyparse import trans
+
 import requests as r
 from bs4 import BeautifulSoup
 import multiprocessing as mp
@@ -6,7 +8,7 @@ from abc import ABC, abstractmethod
 import json
 import os
 from sys import exit
-import time
+from transliterate import translit
 
 
 # Очистить консоль
@@ -22,9 +24,10 @@ class Vacancy:
 
 # Класс для хранения информации о фильтрах для поиска вакансий
 class Filter:
-    def __init__(self, key_words="", area=1, salary=1000, ban_words="", education="", experience_of_work="", employment="", schedule=""):
+    def __init__(self, key_words="", area=1, area_name="krasnodar", salary=1000, ban_words="", education="", experience_of_work="", employment="", schedule=""):
         self.key_words = key_words
         self.area = area
+        self.area_name = area_name
         self.salary = salary
         self.ban_words = ban_words
         self.education = education
@@ -43,7 +46,7 @@ class Filter:
         print("Поиск по графику работы:", *self.schedule)
 
     def copy(self):
-        return Filter(self.key_words, self.area, self.salary, self.ban_words, self.education, self.experience, self.employment, self.schedule)
+        return Filter(self.key_words, self.area, self.area_name, self.salary, self.ban_words, self.education, self.experience, self.employment, self.schedule)
 
 # Общий шаблон о том, как устроен класс парсеров сайтов
 class Parser(ABC):
@@ -214,6 +217,74 @@ class HeadHunterParser(Parser):
     #         if href.text == self.params["page"]+1 and i != len(page_numbers)-1: return False
     #     return True
 
+class HabrParser(Parser):
+    __education = None # в юле нет фильтрации по уровню образования
+    __experience = None
+    __employment = { # attributes[vacancy_employment_type][0]
+        "Полная занятость": "full_time",
+        "Частичная занятость": "part_time"
+    }
+    __schedule = None
+
+    # __headers = {
+    #     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.72 Safari/537.36'
+    # }
+
+    __headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
+    }
+
+    def __init__(self, filter: Filter, vacancies, lock):
+        self.vacancies = vacancies
+        self.lock = lock
+        self.filter = filter.copy()
+        self.url = "https://career.habr.com/vacancies"
+        # self.params = {
+        #     "L_save_area": "true",
+        #     "text": self.filter.key_words,
+        #     "excluded_text": self.filter.ban_words,
+        #     "area": self.filter.area,
+        #     "salary": self.filter.salary,
+        #     "currency_code": "RUR",
+        #     "education": [HeadHunterParser.__education[filter_education] for filter_education in self.filter.education],
+        #     "experience": HeadHunterParser.__experience[self.filter.experience],
+        #     "employment": [HeadHunterParser.__employment[filter_employment] for filter_employment in
+        #                    self.filter.employment],
+        #     "schedule": [HeadHunterParser.__schedule[filter_schedule] for filter_schedule in self.filter.schedule],
+        #     "order_by": "relevance",
+        #     "search_period": "0",
+        #     "items_oxn_page": "100",
+        #     "page": 0,
+        #     "hhtmFrom": "vacancy_search_filter"
+        # }
+        self.params = dict()
+        if self.filter.employment in HabrParser.__employment:
+            self.params["employment_type"] = HabrParser.__employment[filter.employment[0]]
+        self.params["page"] = 1
+        self.params["q"] = self.filter.key_words
+        self.params["salary"] = self.filter.salary
+        self.params["type"] = "all"
+        # self.page = r.get(self.url, params=self.params, headers=HeadHunterParser.__headers)
+
+    def parse(self):
+        while True:
+            page = r.get(self.url, params=self.params, headers=HabrParser.__headers)
+            bs = BeautifulSoup(page.text, "html.parser")
+            page.close()
+
+            all_titles = bs.findAll(class_="vacancy-card__title")
+            all_links = bs.findAll(class_="vacancy-card__icon-link")
+
+            if not all_titles: break
+
+            for i in range(len(all_titles)):
+                url = "https://career.habr.com" + all_links[i]['href']
+                name = all_titles[i].text
+                with self.lock:
+                    self.vacancies.put(Vacancy(name, url, None)) # salary на хабре указан криво, спарсить его не представляется удобным вариантом
+            self.params["page"] += 1
+
 # начать парсинг на всех сайтах учитывая filter. Тут запускаются процессы
 def startParse(filter):
     clear()
@@ -224,19 +295,19 @@ def startParse(filter):
     lock = mp.Lock()
 
     headhunter = HeadHunterParser(filter, vacancies, lock)
-    # habr = HabrParser()
+    habr = HabrParser(filter, vacancies, lock)
     # superjob = SuperJobParser()
 
     hhp = mp.Process(target=headhunter.parse())
-    # h = mp.Process(target=habr.parse())
+    h = mp.Process(target=habr.parse())
     # sj = mp.Process(target=superjob.parse())
 
     hhp.start()
-    # h.start()
+    h.start()
     # sj.start()
 
     hhp.join()
-    # h.join()
+    h.join()
     # sj.join()
 
     print("Поиск завершён!")
@@ -244,21 +315,27 @@ def startParse(filter):
     print("Все найденные вакансии находятся в файле vacancies.txt! (нажмите enter для продолжения)")
     input()
 
-# Вывести все найденные вакансии
+# Сохранить все найденные вакансии
 def save_vacancies(vacancies):
     with open("vacancies.txt", mode='w', encoding='utf-8') as f:
         while not vacancies.empty():
             vacancy = vacancies.get()
-            f.write(f"{vacancy.name} ({vacancy.salary})\n{vacancy.url}\n\n")
+            result = f"{vacancy.name}"
+            if vacancy.salary: result += f" ({vacancy.salary})"
+            result += f"\n{vacancy.url}\n\n"
+            f.write(result)
 
 # Вводим и проверяем город, который ввёл пользователь для парсинга вакансий в нём
-def get_city(areas):
+def get_city(areas, filter):
     while True:
         clear()
         print_menu_text()
         area = input("Введите город: ").capitalize()
         id = getId(areas, area)
-        if id: return id
+        if id:
+            filter.area = id
+            filter.area_name = translit(area.lower(), 'ru', reversed=True)
+            return
         print("Введите существующий город!\n")
 
 # получает все доступные области для парсинга вакансий (с их ID и названиями)
@@ -406,14 +483,14 @@ def get_schedule():
 # вывести название проекта и отступ (красиво типо)
 def print_menu_text():
     tprint("Vacancy Parser", font='big')
-    tprint("="*20, font='big')
+    tprint("="*11, font='big')
 
 def choose_mode(mode, filter, areas):
     match mode:
         case 0: startParse(filter)
         case 1: filter.key_words = get_key_words()
         case 2: filter.ban_words = get_ban_words()
-        case 3: filter.area = get_city(areas)
+        case 3: get_city(areas, filter)
         case 4: filter.salary = get_salary()
         case 5: filter.experience = get_experience()
         case 6: filter.education = get_education()
