@@ -183,7 +183,7 @@ class HeadHunterParser(Parser):
                     url = vacancy["alternate_url"]
                     with self.lock:
                         self.vacancies.put(Vacancy(name, url, salary))
-                if data["page"] < 10:
+                if data["page"] < 15:
                     self.params["page"] += 1
                 else: break
             except KeyError:
