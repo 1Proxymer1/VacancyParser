@@ -1,8 +1,7 @@
-from idlelib.pyparse import trans
-
 import requests as r
 from bs4 import BeautifulSoup
-import multiprocessing as mp
+import threading as mp
+from queue import Queue
 from art import tprint
 from abc import ABC, abstractmethod
 import json
@@ -127,9 +126,10 @@ class HeadHunterParser(Parser):
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
     }
 
-    def __init__(self, filter, vacancies, lock):
+    def __init__(self, filter, vacancies, lock: mp.Lock, request_lock: mp.Lock):
         self.vacancies = vacancies
         self.lock = lock
+        self.request_lock = request_lock
         self.filter = filter.copy()
         self.url = "https://hh.ru/search/vacancy"
         # self.params = {
@@ -167,7 +167,9 @@ class HeadHunterParser(Parser):
         # self.page = r.get(self.url, params=self.params, headers=HeadHunterParser.__headers)
 
     def get_page(self):
+        self.request_lock.acquire()
         page = r.get("https://api.hh.ru/vacancies", params=self.params, headers=HeadHunterParser.__headers)
+        self.request_lock.release()
         data = json.loads(page.content.decode())
         page.close()
         return data
@@ -175,47 +177,21 @@ class HeadHunterParser(Parser):
     def parse(self):
         while True:
             data = self.get_page()
-            try:
             # data["items"].keys() = name, area, salary, url, schedule, experience, employment
-                for vacancy in data["items"]:
-                    name = vacancy["name"]
-                    try:
-                        salary = vacancy["salary"]["from"]
-                    except:
-                        salary = ""
-                    url = vacancy["alternate_url"]
-                    with self.lock:
-                        self.vacancies.put(Vacancy(name, url, salary))
-                if data["page"] < 10:
-                    self.params["page"] += 1
-                else: break
-            except KeyError:
-                print("KEYERROR!!!")
-                print(data)
-            except:
-                print("ОШИБКА ОШИБКА ОШИБКА!!!!")
-                print(data)
-            # vacancies = self.bs.findAll(class_="magritte-redesign")
-            # for vacancy in vacancies:
-            #     name = vacancy.find("span", class_="magritte-text___tkzIl_4-3-12").text
-            #     salary = vacancy.find("span", class_="magritte-text___pbpft_3-0-18 magritte-text_style-primary___AQ7MW_3-0-18 magritte-text_typography-label-1-regular___pi3R-_3-0-18").text
-            #     href = vacancy.find("a", class_="magritte-link___b4rEM_4-3-12 magritte-link_style_neutral___iqoW0_4-3-12 magritte-link_enable-visited___Biyib_4-3-12")['href']
-            #     with self.lock:
-            #         self.vacancies.put(Vacancy(name, href, salary))
-            # if not self.is_last_page():
-            #     self.params["page"] += 1
-            #     self.page = r.get(self.url, params=self.params, headers=self.headers)
-            #     self.bs = BeautifulSoup(self.page.text, "html.parser")
-            # else:
-            #     break
-            # break
-
-    # def is_last_page(self): # returns True if it's the last page
-    #     page_numbers = self.bs.find("ul", class_="magritte-number-pages-container___YIJLn_4-0-22").findAll('li')
-    #     for i, number in enumerate(page_numbers):
-    #         href = number.find("a", class_="magritte-number-pages-action___e3ozw_4-0-22 magritte-number-pages-action-icon___lwXFB_4-0-22")
-    #         if href.text == self.params["page"]+1 and i != len(page_numbers)-1: return False
-    #     return True
+            for vacancy in data["items"]:
+                name = vacancy["name"]
+                try:
+                    salary = vacancy["salary"]["from"]
+                except:
+                    salary = ""
+                url = vacancy["alternate_url"]
+                self.lock.acquire()
+                self.vacancies.put(Vacancy(name, url, salary))
+                self.lock.release()
+            if data["page"] < 15:
+                self.params["page"] += 1
+            else:
+                break
 
 class HabrParser(Parser):
     __education = None # в юле нет фильтрации по уровню образования
@@ -235,9 +211,10 @@ class HabrParser(Parser):
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
     }
 
-    def __init__(self, filter: Filter, vacancies, lock):
+    def __init__(self, filter: Filter, vacancies, lock, request_lock):
         self.vacancies = vacancies
         self.lock = lock
+        self.request_lock = request_lock
         self.filter = filter.copy()
         self.url = "https://career.habr.com/vacancies"
         # self.params = {
@@ -269,14 +246,16 @@ class HabrParser(Parser):
 
     def parse(self):
         while True:
+            self.request_lock.acquire()
             page = r.get(self.url, params=self.params, headers=HabrParser.__headers)
+            self.request_lock.release()
             bs = BeautifulSoup(page.text, "html.parser")
             page.close()
 
             all_titles = bs.findAll(class_="vacancy-card__title")
             all_links = bs.findAll(class_="vacancy-card__icon-link")
-
-            if not all_titles: break
+            if len(all_titles) == 0:
+                break
 
             for i in range(len(all_titles)):
                 url = "https://career.habr.com" + all_links[i]['href']
@@ -284,6 +263,7 @@ class HabrParser(Parser):
                 with self.lock:
                     self.vacancies.put(Vacancy(name, url, None)) # salary на хабре указан криво, спарсить его не представляется удобным вариантом
             self.params["page"] += 1
+        return
 
 # начать парсинг на всех сайтах учитывая filter. Тут запускаются процессы
 def startParse(filter):
@@ -291,24 +271,21 @@ def startParse(filter):
     print_menu_text()
 
     print("Начинаем поиск!")
-    vacancies = mp.Queue()
+    vacancies = Queue()
     lock = mp.Lock()
+    request_lock = mp.Lock()
 
-    headhunter = HeadHunterParser(filter, vacancies, lock)
-    habr = HabrParser(filter, vacancies, lock)
-    # superjob = SuperJobParser()
+    headhunter = HeadHunterParser(filter, vacancies, lock, request_lock)
+    habr = HabrParser(filter, vacancies, lock, request_lock)
 
-    hhp = mp.Process(target=headhunter.parse())
-    h = mp.Process(target=habr.parse())
-    # sj = mp.Process(target=superjob.parse())
+    hhp = mp.Thread(target=headhunter.parse)
+    h = mp.Thread(target=habr.parse)
 
     hhp.start()
     h.start()
-    # sj.start()
 
-    hhp.join()
     h.join()
-    # sj.join()
+    hhp.join()
 
     print("Поиск завершён!")
     save_vacancies(vacancies)
@@ -500,12 +477,6 @@ def choose_mode(mode, filter, areas):
 
 # главное меню программы, отсюда всё запускается
 def main():
-    cpu_count = mp.cpu_count()
-    if cpu_count <= 3:
-        print("Ваше железо не подходит под системные требования программы!")
-        input()
-        exit(0)
-
     areas = getAreas()
     filter = Filter()
     while True:
